@@ -7,22 +7,15 @@ class BuildingSearchSpider(scrapy.Spider):
 
     def start_requests(self):
         url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true"
-        yield scrapy.Request(url=url, callback=self.parse_first_page, meta={'cookiejar':1})
+        yield scrapy.Request(url=url, callback=self.parse_first_page, meta={'cookiejar':1}, dont_filter=True)
+    
 
-
-    def parse_first_page(self, response):
+    def parse_view_state_page(self, response):
         soup = BeautifulSoup(response.body, "html.parser")
-        span = soup.find_all("span", class_ ="ui-paginator-current")[0]
-        total_text = "".join([str(x) for x in span.contents])
-        print(total_text)
-        pattern = '.*total[ ]+([0-9]*)[ ]+'
-        m = re.match(pattern, total_text)
-        total_numbers = int(m.group(1))
-        page_size = 20
-        total_pages = (total_numbers + page_size - 1) / page_size
         view_state = soup.find_all("input", {"name":"javax.faces.ViewState"})[0].get('value')
-        print(view_state)
-        yield scrapy.FormRequest(url='https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf', 
+        page_size = response.meta['page_size']
+        i = response.meta['page_index']
+        yield scrapy.FormRequest(url='https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true', 
                 callback=self.parse_page,
                 headers={'Accept-Encoding': 'gzip, deflate, br',
                          'X-Requested-With': 'XMLHttpRequest',
@@ -42,14 +35,30 @@ class BuildingSearchSpider(scrapy.Spider):
                     'javax.faces.behavior.event':'page',
                     'javax.faces.partial.event':'page',
                     '_bld_result_frm:_result_tbl_pagination':'true',
-                    '_bld_result_frm:_result_tbl_first':'30',
+                    '_bld_result_frm:_result_tbl_first':str(i * page_size),
                     '_bld_result_frm:_result_tbl_rows':str(page_size),
                     '_bld_result_frm:_result_tbl_encodeFeature':'true',
                     '_bld_result_frm:_result_tbl_columnOrder':'_bld_result_frm:_result_tbl:j_id_4c,_bld_result_frm:_result_tbl:j_id_4i,_bld_result_frm:_result_tbl:j_id_4o',
                     '_bld_result_frm_SUBMIT':'1',
                     'autoScroll':'',
                     'javax.faces.ViewState':view_state},
-                meta={'cookiejar':response.meta['cookiejar'], 'view_state':view_state})
+                meta={'cookiejar':response.meta['cookiejar'], 'view_state':view_state, 'page_index': response.meta['page_index'], 'page_size': response.meta['page_size']}, priority=1, dont_filter=True)
+
+
+    def parse_first_page(self, response):
+        soup = BeautifulSoup(response.body, "html.parser")
+        span = soup.find_all("span", class_ ="ui-paginator-current")[0]
+        total_text = "".join([str(x) for x in span.contents])
+        print(total_text)
+        pattern = '.*total[ ]+([0-9]*)[ ]+'
+        m = re.match(pattern, total_text)
+        total_numbers = int(m.group(1))
+        page_size = 15
+        total_pages = (total_numbers + page_size - 1) // page_size
+        url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true"
+        for i in range(0, total_pages):
+            yield scrapy.Request(url=url, callback=self.parse_view_state_page, meta={'cookiejar':i * 10, 'page_size': page_size, 'page_index': i}, priority=- 10 * i, dont_filter=True)
+    
 
     def parse_page(self, response):
         soup = BeautifulSoup(response.body, "lxml-xml")
@@ -80,13 +89,28 @@ class BuildingSearchSpider(scrapy.Spider):
                         'autoScroll':'',
                         'javax.faces.ViewState':response.meta['view_state'],
                         link['id']:link['id']},
-                    meta={'cookiejar':response.meta['cookiejar']})
+                    meta={'cookiejar':response.meta['cookiejar'], 'id':link['id']}, priority=100)
+        i = response.meta['page_index']
+        url = 'https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true'
+        page_size = response.meta['page_size']
 
     def parse_detail_page(self, response):
         soup = BeautifulSoup(response.body, "html.parser")
-        for field in soup.find_all('div', {'class': 'text'}):
-            print(field.text.strip())
-        for field in soup.find_all('div', {'class': 'label'}):
-            print(field.text.strip())
-        for address in soup.find_all('td', {'role': 'gridcell'}):
-            print(address.text.strip())
+        parent_div = soup.find('div', {'id': '_detail_form:j_id_2k_content'})
+        output = {}
+        for div in parent_div.find_all('div', {'class': 'col w2'}) + parent_div.find_all('div', {'class': 'col w1'}):
+            label = div.find('div', {'class': 'label'}).text.strip()
+            value = div.find('div', {'class': 'text'}).text.strip()
+            output[label] = value
+        k = 0
+        for td in soup.find_all('td', {'role': 'gridcell'}):
+            k = k + 1
+            output["address_" + str(k)] = td.text.strip()
+        organization_div = soup.find('div', {'id': '_detail_form:j_id_3r_content'})
+        org_flattern = [org.text.strip() for org in organization_div.find_all('div', {'class': 'text'})]
+        for i in range(0, len(org_flattern) // 2):
+            output['org_type_' + str(i + 1)] = org_flattern[2 * i]
+            output['org_name_' + str(i + 1)] = org_flattern[2 * i + 1]
+        output['link_id'] = response.meta['id']
+        yield output
+
