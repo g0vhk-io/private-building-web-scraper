@@ -5,9 +5,22 @@ from bs4 import BeautifulSoup
 class BuildingSearchSpider(scrapy.Spider):
     name = "building_search"
 
+
     def start_requests(self):
         url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true"
         yield scrapy.Request(url=url, callback=self.parse_first_page, meta={'cookiejar':1}, dont_filter=True)
+
+    def start_requests_chinese(self, response):
+        url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/home.jsf?lang=tc"
+        yield scrapy.Request(url=url, dont_filter=True, callback=self.start_requests_2, meta={'cookiejar':response.meta['cookiejar'], 'page_index': response.meta['page_index'], 'page_size': response.meta['page_size']})
+
+    def start_requests_2(self, response):
+        soup = BeautifulSoup(response.body, "html.parser")
+        print(soup.title)
+        view_state = soup.find_all("input", {"name":"javax.faces.ViewState"})[0].get('value')
+        print(view_state)
+        url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/home.jsf"
+        yield scrapy.FormRequest(url=url, callback=self.parse_view_state_page, meta={'cookiejar':response.meta['cookiejar'], 'page_size': response.meta['page_size'], 'page_index': response.meta['page_index']}, formdata={'language': 'zh_TW', 'javax.faces.ViewState':view_state,'homeFrm:list_building': 'homeFrm:list_building', 'homeFrm_SUBMIT': "1"}, dont_filter=True)
     
 
     def parse_view_state_page(self, response):
@@ -34,6 +47,7 @@ class BuildingSearchSpider(scrapy.Spider):
                     'javax.faces.partial.render':'_bld_result_frm:_result_tbl',
                     'javax.faces.behavior.event':'page',
                     'javax.faces.partial.event':'page',
+                    'language':'zh_TW',
                     '_bld_result_frm:_result_tbl_pagination':'true',
                     '_bld_result_frm:_result_tbl_first':str(i * page_size),
                     '_bld_result_frm:_result_tbl_rows':str(page_size),
@@ -48,6 +62,7 @@ class BuildingSearchSpider(scrapy.Spider):
     def parse_first_page(self, response):
         soup = BeautifulSoup(response.body, "html.parser")
         span = soup.find_all("span", class_ ="ui-paginator-current")[0]
+        print(soup.title)
         total_text = "".join([str(x) for x in span.contents])
         print(total_text)
         pattern = '.*total[ ]+([0-9]*)[ ]+'
@@ -56,8 +71,9 @@ class BuildingSearchSpider(scrapy.Spider):
         page_size = 15
         total_pages = (total_numbers + page_size - 1) // page_size
         url = "https://bmis1.buildingmgt.gov.hk/bd_hadbiex/content/searchbuilding/building_search.jsf?renderedValue=true"
+
         for i in range(0, total_pages):
-            yield scrapy.Request(url=url, callback=self.parse_view_state_page, meta={'cookiejar':i * 10, 'page_size': page_size, 'page_index': i}, priority=- 10 * i, dont_filter=True)
+            yield scrapy.FormRequest(url=url, callback=self.start_requests_chinese, meta={'cookiejar':i * 20 + 7, 'page_size': page_size, 'page_index': i}, formdata={'language': 'zh_TW'}, priority=- 10 * i, dont_filter=True)
     
 
     def parse_page(self, response):
@@ -84,6 +100,7 @@ class BuildingSearchSpider(scrapy.Spider):
                              'Upgrade-Insecure-Request': '1',
                              'Cache-Control': 'max-age=0'},
                     formdata={
+                        'language':'zh_TW',
                         '_bld_result_frm:_result_tbl_columnOrder':'_bld_result_frm:_result_tbl:j_id_4c,_bld_result_frm:_result_tbl:j_id_4i,_bld_result_frm:_result_tbl:j_id_4o',
                         '_bld_result_frm_SUBMIT':'1',
                         'autoScroll':'',
